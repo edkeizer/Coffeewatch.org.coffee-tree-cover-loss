@@ -182,6 +182,12 @@ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
     </div>
   </section>
 
+  <section class="tc-card tc-dark" id="annual">
+    <h2>Tree cover loss in coffee areas peaked in 2017 and has continued since the EUDR cut-off</h2>
+    <p class="tc-note">Hectares of tree cover (canopy 30–100%) lost per year inside potential coffee areas, all countries combined. Bars after the EUDR cut-off of 31 December 2020 are highlighted.</p>
+    <div class="tc-chart tc-annual" data-draw="annual" data-source="annual_total"></div>
+  </section>
+
   <div class="tc-trendrow">
   <section class="tc-card tc-dark" id="trend">
     <h2>Annual loss by country</h2>
@@ -516,6 +522,77 @@ dash.draw('lede-dir', (el) => {
   el.textContent = !k ? '—' : k.change_pct < 0 ? 'down' : k.change_pct > 0 ? 'up' : 'unchanged';
 });
 dash.draw('detail-name', (el) => { el.textContent = tc.country(); });
+</script>
+
+<script>
+// Annual loss, all countries combined, with the EUDR cut-off
+dash.calc('annual_total', {
+  inputs: ['tcl'],
+  title: 'Annual loss, all countries',
+  description: 'Per threshold and year: hectares of tree cover lost inside potential coffee areas, summed over all countries.',
+  fn: (tcl) => {
+    const sums = {};
+    for (const r of tcl) {
+      const k = r.threshold + '|' + r.year;
+      const s = sums[k] = sums[k] || {threshold: r.threshold, year: r.year, ha: 0};
+      s.ha += r.canopy_30_100;
+    }
+    return Object.values(sums).sort((a, b) => a.threshold - b.threshold || a.year - b.year);
+  },
+});
+
+dash.draw('annual', (el) => {
+  el.replaceChildren();
+  if (tc.fail(el, 'annual_total')) return;
+  const d = dash.data('annual_total');
+  if (d.status !== 'ok') return;
+  const rows = d.data.filter((r) => r.threshold === tc.thr());
+  if (!rows.length) return;
+  const W = el.clientWidth || 700, H = 320, y0 = 44, base = H - 28;
+  const svg = d3.select(el).append('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+  const y = d3.scaleLinear([0, d3.max(rows, (r) => r.ha) || 1], [base, y0]).nice();
+  const yt = y.ticks(4);
+  const ml = Math.ceil(tc.measure(svg, yt.map((v) => tc.fmtBig(v) + ' ha'))) + 10, mr = 8;
+  const x = d3.scaleBand(rows.map((r) => r.year), [ml, W - mr]).padding(0.25);
+  svg.append('g').selectAll('line').data(yt).join('line')
+    .attr('x1', ml).attr('x2', W - mr).attr('y1', (v) => y(v)).attr('y2', (v) => y(v)).style('stroke', tc.grid);
+  svg.append('g').selectAll('text').data(yt).join('text')
+    .attr('x', ml - 8).attr('y', (v) => y(v)).attr('dy', '0.32em').attr('text-anchor', 'end')
+    .text((v) => (v === 0 ? '0' : tc.fmtBig(v) + ' ha'));
+  const xt = rows.filter((r) => r.year === 2001 || r.year % (W < 520 ? 10 : 5) === 0 || r.year === 2025);
+  svg.append('g').selectAll('text').data(xt).join('text')
+    .attr('x', (r) => x(r.year) + x.bandwidth() / 2).attr('y', H - 8).attr('text-anchor', 'middle').text((r) => String(r.year));
+  const tp = tc.tip(el);
+  svg.append('g').selectAll('rect').data(rows).join('rect')
+    .attr('x', (r) => x(r.year)).attr('width', x.bandwidth())
+    .attr('y', (r) => y(r.ha)).attr('height', (r) => base - y(r.ha)).attr('rx', 2)
+    .style('fill', (r) => (r.year > 2020 ? '#FFB547' : 'rgba(232,213,185,.5)'))
+    .on('mousemove', (ev, r) => {
+      tp.t.replaceChildren();
+      tc.head(tp.t, String(r.year));
+      tc.row(tp.t, null, 'Tree cover lost', tc.fmtHa(r.ha) + ' ha');
+      const [px, py] = d3.pointer(ev, el);
+      tp.place(px, py);
+    })
+    .on('mouseleave', () => tp.hide());
+  svg.append('line').attr('x1', ml).attr('x2', W - mr).attr('y1', base).attr('y2', base).style('stroke', tc.axis);
+  const first = rows.find((r) => r.year > 2020);
+  if (first) {
+    const cx = x(first.year) - (x.step() * x.paddingInner()) / 2;
+    svg.append('line').attr('x1', cx).attr('x2', cx).attr('y1', y0 - 22).attr('y2', base)
+      .style('stroke', tc.rule).style('stroke-dasharray', '4 3');
+    svg.append('text').attr('x', cx - 6).attr('y', y0 - 26).attr('text-anchor', 'end').text('EUDR cut-off, 31 Dec 2020');
+    const after = d3.sum(rows.filter((r) => r.year > 2020), (r) => r.ha);
+    const room = W - mr - cx > 150;
+    const lx = room ? cx + 8 : ml + 6, anchor = 'start';
+    svg.append('text').attr('x', lx).attr('y', y0 + 12).attr('text-anchor', anchor)
+      .style('font-size', '16px').style('font-weight', 800).style('fill', '#FFB547').text(tc.fmtHa(after) + ' ha');
+    svg.append('text').attr('x', lx).attr('y', y0 + 30).attr('text-anchor', anchor).text('lost in 2021–2025');
+  }
+  const peak = rows.reduce((a, r) => (r.ha > a.ha ? r : a));
+  svg.append('text').attr('x', x(peak.year) + x.bandwidth() / 2).attr('y', y(peak.ha) - 8).attr('text-anchor', 'middle')
+    .style('fill', '#FFF4E4').style('font-weight', 700).text(tc.fmtHa(peak.ha) + ' ha');
+});
 </script>
 
 <script>
